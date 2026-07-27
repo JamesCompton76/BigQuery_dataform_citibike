@@ -50,3 +50,19 @@ dataform compile
 
 ### 4. Visualizing the DAG
 To view the visual lineage graph locally without deploying to Google Cloud, open the project in VS Code and install a Dataform DAG extension (e.g., *Dataform DAG* or *Dataform tools*). Use the VS Code Command Palette (`Ctrl + Shift + P`) and execute the "Show Graph" command to render the pipeline map.
+
+## Orchestration & Scheduling
+In a production Google Cloud Platform (GCP) environment, this pipeline is designed to be automated rather than manually executed. The `.sqlx` architecture supports multiple scheduling strategies depending on the surrounding infrastructure:
+
+### 1. Native Dataform Scheduling
+For a lightweight, serverless approach with zero infrastructure overhead, scheduling is handled directly within the Dataform UI. 
+*   **Release Configurations:** Automatically compiles the repository's `main` branch into a deployable state on a defined schedule.
+*   **Workflow Configurations:** Executes the compiled release using a standard CRON expression (e.g., `0 0 * * *` for daily runs at midnight).
+
+### 2. Enterprise Orchestration (Cloud Composer / Airflow)
+If this pipeline requires coordination with upstream processes (such as a Dataproc PySpark job or an external API ingestion tool), it can be seamlessly orchestrated using Google Cloud Composer. An Apache Airflow DAG can utilize Dataform API operators to trigger the workflow execution only after all raw upstream data has successfully landed in BigQuery.
+
+### 3. Tag-Based Execution at Scale
+To efficiently scale the repository as new tables are added, the pipeline utilizes Dataform tags.
+*   **Implementation:** Tags are added to the `config {}` block of individual `.sqlx` files (e.g., `tags: ["monthly_churn"]`).
+*   **Execution:** Instead of scheduling individual tables, the orchestrator triggers specific tags. Dataform automatically resolves the Directed Acyclic Graph (DAG) and executes only the necessary sources, facts, and downstream marts in the correct dependency order.
