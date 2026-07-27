@@ -1,0 +1,94 @@
+config {
+  type: "table",
+  description: "Aggregated monthly trip activity per customer cohort."
+}
+
+-- TASK 1: Build a Clean Customer Activity Table
+
+WITH base_trips AS (
+    SELECT
+        tripduration,
+        starttime,
+        DATE_TRUNC(DATE(starttime), MONTH) AS trip_start_month,
+        start_station_id,
+        start_station_name,
+        birth_year,
+        gender
+    FROM ${ref("citibike_trips")}
+    WHERE usertype = 'Subscriber'
+      AND start_station_id IS NOT NULL
+      -- Filtered out NULL demographics to ensure that the surrogate key is clean, also filtered out unknown gender so I'm not creating 2 customers if that customer takes another trip where they do include their gender
+      AND birth_year IS NOT NULL 
+      AND gender IS NOT NULL 
+      AND gender != 'unknown'
+),
+
+-- Used GROUP rather than DISTINCT to avoid the possibility that capacity is a slow moving dimension
+stations AS (
+    SELECT 
+        name AS station_name,
+        MAX(capacity) AS station_capacity
+    FROM ${ref("citibike_stations")}
+    GROUP BY station_name
+),
+
+enriched_trips AS (
+    SELECT
+        t.tripduration,
+        t.starttime,
+        t.trip_start_month,
+        t.start_station_id,
+        t.start_station_name,
+        t.birth_year,
+        t.gender,
+        s.station_capacity,
+        -- Created the surrogate customer_id from birth_year, gender and start_station_id
+        TO_HEX(MD5(CONCAT(
+            CAST(t.birth_year AS STRING), '_',
+            CAST(t.gender AS STRING), '_',
+            CAST(t.start_station_id AS STRING)
+        ))) AS customer_id
+    FROM base_trips t
+    LEFT JOIN stations s
+      ON t.start_station_name = s.station_name
+),
+
+-- Aggregate the activity data to the monthly level
+monthly_activity AS (
+    SELECT
+        customer_id,
+        trip_start_month,
+        birth_year,
+        gender,
+        start_station_id,
+        start_station_name,
+        station_capacity,
+        COUNT(1) AS trip_count,
+        SUM(tripduration) AS total_trip_duration_seconds,
+        MIN(starttime) AS first_trip_this_month,
+        MAX(starttime) AS last_trip_this_month
+    FROM enriched_trips
+    GROUP BY 
+        customer_id,
+        trip_start_month,
+        birth_year,
+        gender,
+        start_station_id,
+        start_station_name,
+        station_capacity
+)
+
+-- Use the window functions below to calculate the overall lifetime dates for the customer cohort
+SELECT
+    customer_id,
+    trip_start_month,
+    birth_year,
+    gender,
+    start_station_id,
+    start_station_name,
+    station_capacity,
+    trip_count,
+    total_trip_duration_seconds,
+    MIN(first_trip_this_month) OVER (PARTITION BY customer_id) AS overall_first_trip_date,
+    MAX(last_trip_this_month) OVER (PARTITION BY customer_id) AS overall_last_trip_date
+FROM monthly_activity

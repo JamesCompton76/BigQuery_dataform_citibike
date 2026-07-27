@@ -1,0 +1,7 @@
+{
+  "defaultSchema": "data_science_technical_project",
+  "assertionSchema": "data_quality_assertions",
+  "warehouse": "bigquery",
+  "defaultDatabase": "jc76-data-science-project",
+  "defaultLocation": "US"
+}

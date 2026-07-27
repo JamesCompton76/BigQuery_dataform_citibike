@@ -1,0 +1,105 @@
+config {
+  type: "table",
+  description: "Monthly churn and active user metrics segmented by gender."
+}
+
+-- TASK 2: Identify Monthly Churn and Active Customers Segmented on Gender
+
+-- Finds the first and last possible month from the activity table from Task 1
+WITH global_months AS (
+    SELECT 
+        MIN(trip_start_month) AS first_overall_month,
+        MAX(trip_start_month) AS last_overall_month
+    FROM ${ref("fct_customer_monthly_activity")}
+),
+
+-- Create a Date Spine of every single month in the dataset
+month_spine AS (
+    SELECT 
+        DATE_TRUNC(date_array, MONTH) AS reporting_month
+    FROM global_months,
+    UNNEST(GENERATE_DATE_ARRAY(first_overall_month, last_overall_month, INTERVAL 1 MONTH)) AS date_array
+),
+
+-- Identify when each customer entered the pool and bring gender along
+customer_starts AS (
+    SELECT 
+        customer_id,
+        gender,
+        MIN(trip_start_month) AS first_active_month
+    FROM ${ref("fct_customer_monthly_activity")}
+    GROUP BY customer_id, gender
+),
+
+-- Cross join customers with months to create a row for EVERY month after they join
+customer_month_spine AS (
+    SELECT 
+        c.customer_id,
+        c.gender,
+        m.reporting_month
+    FROM customer_starts c
+    CROSS JOIN month_spine m
+    WHERE m.reporting_month >= c.first_active_month
+),
+
+-- Left join the actual activity data to the spine of months created previously
+monthly_activity AS (
+    SELECT
+        s.customer_id,
+        s.gender,
+        s.reporting_month,
+        COALESCE(a.trip_count, 0) AS trips_this_month
+    FROM customer_month_spine s
+    LEFT JOIN ${ref("fct_customer_monthly_activity")} a
+        ON s.customer_id = a.customer_id
+        AND s.reporting_month = a.trip_start_month
+),
+
+-- lag and lead to get M-1 and M+1
+activity_lag_lead AS (
+    SELECT
+        customer_id,
+        gender,
+        reporting_month,
+        trips_this_month,
+        COALESCE(LAG(trips_this_month) OVER (PARTITION BY customer_id ORDER BY reporting_month), 0) AS trips_last_month,
+        COALESCE(LEAD(trips_this_month) OVER (PARTITION BY customer_id ORDER BY reporting_month), 0) AS trips_next_month
+    FROM monthly_activity
+),
+
+-- Apply the active and churned definitions
+user_classification AS (
+    SELECT
+        customer_id,
+        gender,
+        reporting_month,
+        -- Churned in Month M: >=1 trip in M-1, 0 in M, 0 in M+1
+        CASE 
+            WHEN trips_last_month >= 1 AND trips_this_month = 0 AND trips_next_month = 0 THEN 1 
+            ELSE 0 
+        END AS is_churned,
+        
+        -- Active: They are taking trips, OR taking exactly a 1-month break (didn't churn)
+        CASE 
+            WHEN trips_this_month > 0 THEN 1 
+            WHEN trips_last_month >= 1 AND trips_this_month = 0 AND trips_next_month > 0 THEN 1
+            ELSE 0 
+        END AS is_active
+    FROM activity_lag_lead
+)
+
+-- Apply aggregation in order to get the final metrics segmented by Gender
+SELECT 
+    reporting_month,
+    gender,
+    SUM(is_active) AS total_active_customers,
+    SUM(is_churned) AS total_churned_customers,
+    
+    -- Churn rate definition: churned this month / active last month, partitioned by gender
+    SAFE_DIVIDE(
+        SUM(is_churned), 
+        LAG(SUM(is_active)) OVER (PARTITION BY gender ORDER BY reporting_month)
+    ) AS churn_rate
+FROM user_classification
+GROUP BY reporting_month, gender
+ORDER BY reporting_month, gender
