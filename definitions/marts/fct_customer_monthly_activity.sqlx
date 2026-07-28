@@ -1,6 +1,10 @@
 config {
   type: "table",
-  description: "Aggregated monthly trip activity per customer cohort."
+  assertions: {
+    rowConditions: [
+      "gender IN ('Male', 'Female')"
+    ]
+  }
 }
 
 -- TASK 1: Build a Clean Customer Activity Table
