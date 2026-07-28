@@ -7,7 +7,7 @@ A serverless Dataform pipeline built on Google BigQuery to model customer activi
 This pipeline is divided into three distinct layers:
 1. **Sources:** Declarations mapping to the raw BigQuery public datasets (`citibike_trips` and `citibike_stations`).
 2. **Facts (`fct_customer_monthly_activity`):** A cleansed, aggregated table tracking monthly trip counts, durations, and lifetime boundaries per unique customer surrogate key.
-3. **Marts:** Business-facing tables identifying overall monthly churn and segmenting that churn by demographic cohorts (Gender).
+3. **Marts:** Business-facing tables identifying overall monthly churn and segmenting that churn by demographic cohorts (Gender). These tables are tagged with `["monthly"]` for targeted execution during orchestration.
 
 **A Note on Source Declarations & Visual Lineage:** 
 While Dataform natively supports declaring multiple sources in a single `sources.js` file (which compiles perfectly), local DAG visualizers (like VS Code extensions) often fail to parse `.js` files when rendering the dependency graph. To ensure the raw source tables are accurately reflected in the visual lineage map, the sources in this repository are intentionally declared using individual `.sqlx` files.
@@ -19,6 +19,12 @@ This pipeline defines the customer states as follows:
 * **Active:** A customer is considered active in Month M if they took at least one trip in Month M, *or* if they took exactly a one-month break (active in M-1, zero trips in M, active in M+1).
 * **Churned:** A customer is considered churned in Month M if they were active in Month M-1, took zero trips in Month M, and took zero trips in Month M+1.
 * **Churn Rate:** Calculated as `Total Churned Customers in Month M / Total Active Customers in Month M-1`.
+
+## Data Quality & Governance
+This project utilizes Dataform's native configuration blocks to enforce data quality and improve data discoverability within the data warehouse.
+
+*   **Defensive Programming:** To protect downstream dashboards from upstream data drift, the `fct_customer_monthly_activity` table includes a `rowConditions` assertion. This acts as a circuit breaker; if the raw source system introduces an uncatered demographic category (e.g., a new gender string), the assertion fails during compilation, halting the pipeline before corrupted cohorts reach the business layer.
+*   **Metadata Integration:** Table-level context is declared directly within the `.sqlx` `config` blocks using the `description` property. Upon deployment, Dataform automatically pushes this documentation into BigQuery's native table metadata, providing immediate context for downstream BI analysts exploring the data within the BigQuery UI.
 
 ## Local Development & Installation
 This project was developed and compiled locally using the Dataform CLI. 
